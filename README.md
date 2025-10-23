@@ -14,7 +14,7 @@ Extending standard Gaussian process regression to inference with indirect observ
 
 This package provides a python implementation of the method. To the best of our knowledge, the full algorithm was first described by Valentine and Sambridge, 2019 [[1]](#1) in the context of geostatistics. We are primarily interested in its application to the spectral reconstruction of correlation functions in computational quantum field theory [[2-4]](#2). Nevertheless, the software is largely problem-agnostic and generally applicable in a wide variety of similar settings.
 
-We recommend [[1]](#1) and [[2]](#2) for an introduction to the method, while the textbook by Rasmussen and Wiliams [[5]](#5) is an excellent general introdution to Gaussian Processes.
+The specific theoretical background, some practical examples and possible extensions are presented in the Thesis of Jonas Turnwald [[5]](#5). Additionally, we recommend [[1]](#1) and [[2]](#2) for other introductions to the method, while the textbook by Rasmussen and Wiliams [[6]](#6) is an excellent general introdution to Gaussian Processes.
 
 In the current framework, it is not possible to include global inequality constraints, most relevant to reconstruct a strictily positive function. This makes reconstructing sharp peaks that swiftly approach zero at the tails one of the hardest reconstruction problems with this technique. Currently, we are looking into several possibilites to provide such a feature in the future.
 
@@ -113,4 +113,7 @@ J. M. Pawlowski, C. S. Schneider, J. Turnwald, J. M. Urban, and N. Wink, Yang-Mi
 J. Horak, J. M. Pawlowski, J. Turnwald, J. M. Urban, N. Wink, and S. Zafeiropoulos, Nonperturbative strong coupling at timelike momenta, [Phys. Rev. D 107, 076019 (2023), arXiv:2301.07785 [hep-ph]](https://arxiv.org/abs/2301.07785).
 
 <a id="5">[5]</a>
+J. Turnwald,  [From Spectral Reconstruction to Chaos in Quantum Chromodynamics, Technische Universität Darmstadt, 2025](https://doi.org/10.26083/tuprints-00031021)
+
+<a id="6">[6]</a>
 C. Rasmussen and C. Williams, [Gaussian Processes for Machine Learning, The MIT Press, 2005](https://doi.org/10.7551/mitpress/3206.001.0001).
