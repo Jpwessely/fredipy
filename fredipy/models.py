@@ -8,7 +8,7 @@ import numpy as np
 import scipy as sp
 
 from .covariance import TwoSided, OneSided
-from .util import make_column_vector
+from .util import allclose, make_column_vector
 
 
 class Model:
@@ -218,11 +218,12 @@ class GaussianProcess(Model):
             self,
             w_pred: np.ndarray,
             ) -> None:
-        if not self._inference_cache:
-            OpKer = self.OpKer(
-                self.kernel, self.constraints, w_pred)
-            self._inference_cache = {
-                'OpKer': OpKer}
+        if self._inference_cache and allclose(w_pred, self._inference_cache['w_pred']):
+            return
+        OpKer = self.OpKer(
+            self.kernel, self.constraints, w_pred)
+        self._inference_cache = {
+            'OpKer': OpKer, 'w_pred': w_pred}
 
 
 class GP(GaussianProcess):
