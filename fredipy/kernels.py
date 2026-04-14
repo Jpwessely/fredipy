@@ -164,7 +164,7 @@ class RadialBasisFunction(Kernel):
         grad = [empy for _ in range(self.dim)]
         grad[0] = lambda x, y: 2 / self.variance * self.make(x, y)
         for i in range(self.dim - 1):
-            grad[i + 1] = lambda x, y: self.make(x, y) * (
+            grad[i + 1] = lambda x, y, i=i: self.make(x, y) * (
                 np.sum(make_column_vector(x[:, i])**2, 1)[:, None]
                 + np.sum(make_column_vector(y[:, i])**2, 1)
                 - 2 * make_column_vector(x[:, i]) @ make_row_vector(y[:, i])
