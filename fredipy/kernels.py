@@ -278,6 +278,12 @@ class AsymptoticKernel(Kernel):
         self._K_asymp = None
         self.dim = kernel.dim
 
+    def _empty_cache(self) -> None:
+        """Clear this kernel's cache and propagate to the inner kernel."""
+        self._K_asymp = None
+        self._x, self._y = np.array([None]), np.array([None])
+        self.kernel._empty_cache()
+
     def add_asymptotics(
             self,
             region: str,
@@ -369,6 +375,136 @@ class AsymptoticKernel(Kernel):
                 assert len(asymp_params) == 2, 'you have 2 parameters in the model, provide as many new parameters'
                 self.mu_uv = asymp_params[0]
                 self.l_uv = asymp_params[1]
+
+    def params_gradient(self) -> List[Callable]:
+        """Analytic gradient of the asymptotic kernel w.r.t. all hyperparameters.
+
+        Returns a list of functions ``f_i(x, y)`` such that
+        ``dK_asymp / dtheta_i = f_i(x, y)``.
+
+        Parameter ordering (identical to ``set_params`` / flat-vector convention):
+            [base_kernel_params...,  mu_uv, l_uv  (if UV),  mu_ir, l_ir  (if IR)]
+
+        Derivation
+        ----------
+        With the shorthands
+            σ_+(x) = softtheta(x, mu, l, +1)  (sigmoid, 0 → 1)
+            σ_-(x) = softtheta(x, mu, l, −1)  (complement, 1 → 0)
+        and the three kernel regions
+            A = σ_-(x;ir)·σ_-(y;ir)·f_ir(x)·f_ir(y)
+            B = σ_+(x;ir)·σ_+(y;ir)·K_rbf·σ_-(x;uv)·σ_-(y;uv)
+            C = σ_+(x;uv)·σ_+(y;uv)·f_uv(x)·f_uv(y)
+        the sigmoid derivative identity  dσ_±/dmu = ∓(1/l)·σ_+·σ_−  gives:
+
+        dK/dmu_uv = (1/l_uv)·[B·(σ_+(x;uv)+σ_+(y;uv)) − C·(σ_-(x;uv)+σ_-(y;uv))]
+        dK/dl_uv  = (1/l_uv²)·[B·((x−mu_uv)·σ_+(x;uv)+(y−mu_uv)·σ_+(y;uv))
+                                −C·((x−mu_uv)·σ_-(x;uv)+(y−mu_uv)·σ_-(y;uv))]
+        dK/dmu_ir = (1/l_ir)·[A·(σ_+(x;ir)+σ_+(y;ir)) − B·(σ_-(x;ir)+σ_-(y;ir))]
+        dK/dl_ir  = (1/l_ir²)·[A·((x−mu_ir)·σ_+(x;ir)+(y−mu_ir)·σ_+(y;ir))
+                                −B·((x−mu_ir)·σ_-(x;ir)+(y−mu_ir)·σ_-(y;ir))]
+
+        The base-kernel gradients are windowed by the RBF transition region:
+        dK/d(rbf_i) = σ_+(x;ir)·σ_+(y;ir)·(dK_rbf/dtheta_i)·σ_-(x;uv)·σ_-(y;uv)
+
+        When only one asymptotic region is active the absent softthetas reduce to
+        1 (sign=0 path in softtheta), so the formulas remain valid throughout.
+        """
+        grads = []
+
+        # ---- base-kernel parameter gradients --------------------------------
+        base_grads = self.kernel.params_gradient()
+        for bg in base_grads:
+            def _wrap(x, y, _bg=bg):
+                x1 = make_column_vector(x[:, 0])
+                y1 = make_row_vector(y[:, 0])
+                tau_x = softtheta(x1, self.mu_ir, self.l_ir, -self.ir)   # σ_+(x;ir)
+                tau_y = softtheta(y1, self.mu_ir, self.l_ir, -self.ir)
+                sig_x = softtheta(x1, self.mu_uv, self.l_uv, -self.uv)   # σ_-(x;uv)
+                sig_y = softtheta(y1, self.mu_uv, self.l_uv, -self.uv)
+                return tau_x * tau_y * _bg(x, y) * sig_x * sig_y
+            grads.append(_wrap)
+
+        # ---- UV asymptotic parameter gradients: mu_uv, l_uv ----------------
+        if self.uv:
+            def _dK_dmu_uv(x, y):
+                x1 = make_column_vector(x[:, 0])
+                y1 = make_row_vector(y[:, 0])
+                tau_x = softtheta(x1, self.mu_ir, self.l_ir, -self.ir)
+                tau_y = softtheta(y1, self.mu_ir, self.l_ir, -self.ir)
+                sp_x  = softtheta(x1, self.mu_uv, self.l_uv,  self.uv)   # σ_+(x;uv)
+                sp_y  = softtheta(y1, self.mu_uv, self.l_uv,  self.uv)
+                sm_x  = softtheta(x1, self.mu_uv, self.l_uv, -self.uv)   # σ_-(x;uv)
+                sm_y  = softtheta(y1, self.mu_uv, self.l_uv, -self.uv)
+                K_rbf = self.kernel(x, y)
+                f_x   = self.uv_asymptotics(x1)
+                f_y   = self.uv_asymptotics(y1)
+                return (1.0 / self.l_uv) * (
+                    tau_x * tau_y * K_rbf * sm_x * sm_y * (sp_x + sp_y)
+                    - sp_x * sp_y * f_x * f_y * (sm_x + sm_y)
+                )
+
+            def _dK_dl_uv(x, y):
+                x1 = make_column_vector(x[:, 0])
+                y1 = make_row_vector(y[:, 0])
+                tau_x = softtheta(x1, self.mu_ir, self.l_ir, -self.ir)
+                tau_y = softtheta(y1, self.mu_ir, self.l_ir, -self.ir)
+                sp_x  = softtheta(x1, self.mu_uv, self.l_uv,  self.uv)
+                sp_y  = softtheta(y1, self.mu_uv, self.l_uv,  self.uv)
+                sm_x  = softtheta(x1, self.mu_uv, self.l_uv, -self.uv)
+                sm_y  = softtheta(y1, self.mu_uv, self.l_uv, -self.uv)
+                K_rbf = self.kernel(x, y)
+                f_x   = self.uv_asymptotics(x1)
+                f_y   = self.uv_asymptotics(y1)
+                dx    = x1 - self.mu_uv
+                dy    = y1 - self.mu_uv
+                return (1.0 / self.l_uv**2) * (
+                    tau_x * tau_y * K_rbf * sm_x * sm_y * (dx * sp_x + dy * sp_y)
+                    - sp_x * sp_y * f_x * f_y * (dx * sm_x + dy * sm_y)
+                )
+
+            grads.extend([_dK_dmu_uv, _dK_dl_uv])
+
+        # ---- IR asymptotic parameter gradients: mu_ir, l_ir ----------------
+        if self.ir:
+            def _dK_dmu_ir(x, y):
+                x1  = make_column_vector(x[:, 0])
+                y1  = make_row_vector(y[:, 0])
+                tp_x = softtheta(x1, self.mu_ir, self.l_ir, -self.ir)    # σ_+(x;ir)
+                tp_y = softtheta(y1, self.mu_ir, self.l_ir, -self.ir)
+                tm_x = softtheta(x1, self.mu_ir, self.l_ir,  self.ir)    # σ_-(x;ir)
+                tm_y = softtheta(y1, self.mu_ir, self.l_ir,  self.ir)
+                sm_x = softtheta(x1, self.mu_uv, self.l_uv, -self.uv)
+                sm_y = softtheta(y1, self.mu_uv, self.l_uv, -self.uv)
+                K_rbf = self.kernel(x, y)
+                f_x  = self.ir_asymptotics(x1)
+                f_y  = self.ir_asymptotics(y1)
+                return (1.0 / self.l_ir) * (
+                    tm_x * tm_y * f_x * f_y * (tp_x + tp_y)
+                    - tp_x * tp_y * K_rbf * sm_x * sm_y * (tm_x + tm_y)
+                )
+
+            def _dK_dl_ir(x, y):
+                x1  = make_column_vector(x[:, 0])
+                y1  = make_row_vector(y[:, 0])
+                tp_x = softtheta(x1, self.mu_ir, self.l_ir, -self.ir)
+                tp_y = softtheta(y1, self.mu_ir, self.l_ir, -self.ir)
+                tm_x = softtheta(x1, self.mu_ir, self.l_ir,  self.ir)
+                tm_y = softtheta(y1, self.mu_ir, self.l_ir,  self.ir)
+                sm_x = softtheta(x1, self.mu_uv, self.l_uv, -self.uv)
+                sm_y = softtheta(y1, self.mu_uv, self.l_uv, -self.uv)
+                K_rbf = self.kernel(x, y)
+                f_x  = self.ir_asymptotics(x1)
+                f_y  = self.ir_asymptotics(y1)
+                dx   = x1 - self.mu_ir
+                dy   = y1 - self.mu_ir
+                return (1.0 / self.l_ir**2) * (
+                    tm_x * tm_y * f_x * f_y * (dx * tp_x + dy * tp_y)
+                    - tp_x * tp_y * K_rbf * sm_x * sm_y * (dx * tm_x + dy * tm_y)
+                )
+
+            grads.extend([_dK_dmu_ir, _dK_dl_ir])
+
+        return grads
 
 
 class Matern12(Kernel):
