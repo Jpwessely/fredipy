@@ -196,9 +196,8 @@ class Riemann_1D_log(Integrator):
     Uses midpoints equally spaced in log-space and a scalar step
     ``dw = d(log ω) = log(w_max/w_min) / int_n``.
 
-    Because the Jacobian of the substitution t = log ω is ω, every kernel
-    passed to this integrator must include that factor, i.e. the caller is
-    responsible for passing ``ω · K(p, ω)`` instead of ``K(p, ω)``.
+    The Jacobian of the substitution t = log ω is ω and is applied
+    internally, so plain kernels ``K(p, ω)`` can be passed directly.
     """
 
     def __init__(
@@ -211,6 +210,7 @@ class Riemann_1D_log(Integrator):
         w_edges = make_column_vector(np.geomspace(w_min, w_max, int_n + 1))
         self.dw = np.log(w_max / w_min) / int_n  # uniform step in log-space
         self.w = np.sqrt(w_edges[:-1] * w_edges[1:])  # geometric midpoints
+        self.jac = make_row_vector(self.w)  # log-space Jacobian: ω_i, shape (1, n)
 
     def doubleIntegrationSymmetric(
             self,
@@ -226,9 +226,9 @@ class Riemann_1D_log(Integrator):
             constraint2: LinearEquality
             ) -> np.ndarray:
         return self.dw**2 * (
-            constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
+            self.jac * constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
             @ kernel(self.w, self.w)
-            @ (constraint2(make_row_vector(self.w), x=make_column_vector(constraint2.x))).T
+            @ (self.jac * constraint2(make_row_vector(self.w), x=make_column_vector(constraint2.x))).T
         )
 
     def singleIntegration(
@@ -238,7 +238,7 @@ class Riemann_1D_log(Integrator):
             w_pred: np.ndarray
             ) -> np.ndarray:
         return self.dw * (
-            constraint(make_row_vector(self.w), x=make_column_vector(constraint.x))
+            self.jac * constraint(make_row_vector(self.w), x=make_column_vector(constraint.x))
             @ kernel(self.w, w_pred)
         )
 
@@ -253,9 +253,8 @@ class GaussLegendre_1D_log(Integrator):
     smooth integrands, requiring far fewer points than Riemann rules for the
     same accuracy (typically 50–200 instead of 1000).
 
-    As with ``Riemann_1D_log``, every kernel passed to this integrator must
-    include the log-space Jacobian factor ω, i.e. the caller is responsible
-    for passing ``ω · K(p, ω)`` instead of ``K(p, ω)``.
+    The log-space Jacobian factor ω is absorbed into the quadrature weights,
+    so plain kernels ``K(p, ω)`` can be passed directly.
     """
 
     def __init__(
@@ -275,8 +274,8 @@ class GaussLegendre_1D_log(Integrator):
 
         t = half_range * xi + 0.5 * (log_max + log_min)   # nodes in log-space
         self.w = make_column_vector(np.exp(t))              # nodes in ω-space
-        # Weights absorb the half-range Jacobian of the linear change of variables
-        self.weights = make_row_vector(wi * half_range)     # shape (1, int_n)
+        # Weights absorb the half-range Jacobian and the log-space Jacobian ω
+        self.weights = make_row_vector(wi * half_range) * self.w.T  # shape (1, int_n)
 
     def doubleIntegrationSymmetric(
             self,
@@ -321,6 +320,9 @@ class GaussLegendre_1D_log_UVtail(GaussLegendre_1D_log):
     constant, giving the closed form
 
         T = (2 log w_uv)^{-13/22} / (2 × 13/22).
+
+    As with the parent class, plain kernels ``K(p, ω)`` are passed directly;
+    the log-space Jacobian ω is absorbed into the quadrature weights.
 
     **Correction formulas** (A_θ = UV-component of the bulk integral):
 
@@ -397,9 +399,9 @@ class GaussLegendre_1D_semiinf(Integrator):
         ω = w_scale · (1 + u) / (1 − u),   u ∈ (−1, 1)
 
     which maps (−1, 1) exactly onto (0, ∞).  The log-space Jacobian
-    d(log ω)/du = 2/(1 − u²) is absorbed into the quadrature weights,
-    so every kernel passed here must include the log-space factor ω,
-    i.e. pass ``ω · K(p, ω)`` instead of ``K(p, ω)``.
+    d(log ω)/du = 2/(1 − u²) and the ω factor are both absorbed into
+    the quadrature weights, so plain kernels ``K(p, ω)`` can be passed
+    directly.
 
     Parameters
     ----------
@@ -428,8 +430,8 @@ class GaussLegendre_1D_semiinf(Integrator):
 
         # rational map (-1,1) → (0,∞)
         self.w = make_column_vector(w_scale * (1.0 + xi) / (1.0 - xi))
-        # log-space weights: dlog(ω)/du = 2/(1-u²)
-        self.weights = make_row_vector(wi * 2.0 / (1.0 - xi**2))
+        # weights: log-space d(log ω)/du = 2/(1-u²), plus ω Jacobian absorbed
+        self.weights = make_row_vector(wi * 2.0 / (1.0 - xi**2)) * self.w.T
 
     def doubleIntegrationSymmetric(
             self,
