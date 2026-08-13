@@ -106,7 +106,7 @@ class GaussianProcess(Model):
         if full_cov:
             return mu, C
         else:
-            return mu, np.sqrt(np.diag(C))
+            return mu, np.sqrt(np.clip(np.diag(C), a_min=0.0, a_max=None))
 
     def predict_data(
             self,
@@ -142,7 +142,7 @@ class GaussianProcess(Model):
         if full_cov:
             return mu, C
         else:
-            return mu, np.sqrt(np.diag(C))
+            return mu, np.sqrt(np.clip(np.diag(C), a_min=0.0, a_max=None))
 
     def log_likelihood(self) -> float:
         """Returns the log-likelihood of the posterior GP."""
