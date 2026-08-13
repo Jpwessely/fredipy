@@ -27,6 +27,19 @@ def test_softtheta():
     assert np.allclose(result, expected)
 
 
+def test_softtheta_sign_negative_does_not_overflow_to_nan():
+    # Regression test: x deep below mu0 relative to l0 (e.g. deep-IR kernel evaluations with a
+    # narrow l_ir) previously overflowed exp() in the sign<0 branch's direct exp/(exp+1) form,
+    # producing inf/inf = nan instead of the correct limit of 1.0.
+    x = np.array([0.0, 1e-3])
+    mu0, l0 = 1.0, 1e-3  # (mu0 - x)/l0 >> 709 for both x values: exp() overflows
+
+    result = softtheta(x, mu0, l0, -1)
+
+    assert np.all(np.isfinite(result))
+    assert np.allclose(result, 1.0)
+
+
 def test_allclose():
     a = np.array([1, 2, 3])
     b = np.array([1, 2, 3])

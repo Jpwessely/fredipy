@@ -53,7 +53,11 @@ def softtheta(
         return 1/(np.exp(-1*(x - mu0)/l0) + 1)
 
     elif sign < 0:
-        return np.exp(-1*(x - mu0)/l0)/(np.exp(-1*(x - mu0)/l0) + 1)
+        # Written as the exact algebraic complement of the sign>0 branch above, rather than as
+        # exp(...)/(exp(...)+1) directly: for x far below mu0 (deep cutoff region), the direct
+        # form divides inf by inf and returns nan, even though the correct limit is exactly 1.
+        # The complement form only ever evaluates the already-overflow-safe sign>0 branch.
+        return 1 - 1/(np.exp(-1*(x - mu0)/l0) + 1)
 
     else:
         return np.ones_like(x)
