@@ -175,7 +175,10 @@ class GaussianProcess(Model):
         kernel_grad = self.kernel.params_gradient()
 
         for i in range(self.kernel.dim):
-            OpKer_grad = self.OpKerOp(kernel_grad[i], self.constraints)
+            # derivative=True tells the covariance machinery that kernel_grad[i] is dK/dtheta_i,
+            # not K: blocks assembled with terms that do not depend on the kernel (the constant
+            # analytic UV tail moment T) must drop those terms rather than reproduce them.
+            OpKer_grad = self.OpKerOp(kernel_grad[i], self.constraints, derivative=True)
             loglik_grad[i] = 0.5 * np.trace((alpha @ alpha.T - K_inv) @ OpKer_grad)
 
         return loglik_grad

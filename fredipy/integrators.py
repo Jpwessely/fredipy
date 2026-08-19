@@ -21,7 +21,8 @@ class Integrator():
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False
             ) -> np.ndarray:
         r"""Symmetric double integration of a constraint C with a GP kernel K, i.e.
 
@@ -31,6 +32,8 @@ class Integrator():
         ----------
         constraint  : Some integral constraint
         kernel      : Some Gaussian process kernel
+        derivative  : True when ``kernel`` is dK/dtheta rather than K, see
+                      :meth:`doubleIntegration`.
 
         Returns
         -------
@@ -42,7 +45,8 @@ class Integrator():
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False
             ) -> np.ndarray:
         r"""Double integration of two (different) constraints C1 and C2 with a GP kernel K, i.e.
 
@@ -52,6 +56,16 @@ class Integrator():
         ----------
         constraint1, constraint2  : Some integral constraints
         kernel      : Some Gaussian process kernel
+        derivative  : Flag set by ``GaussianProcess.log_likelihood_grad`` (via
+                      ``TwoSided``) to say that ``kernel`` is the derivative
+                      dK/dtheta of the kernel with respect to one hyperparameter
+                      rather than the kernel itself.  Purely quadrature-based
+                      implementations are linear in ``kernel`` and can ignore it;
+                      any term that is *not* linear in ``kernel`` (the constant
+                      analytic tail moment of
+                      :meth:`GaussLegendre_1D_log._uv_tail_correction`) must be
+                      dropped when it is set, since the derivative of a constant
+                      is zero.
 
         Returns
         -------
@@ -81,6 +95,61 @@ class Integrator():
         """
         raise NotImplementedError
 
+    def uv_tail_moment(
+            self,
+            constraint: LinearEquality
+            ) -> np.ndarray:
+        r"""Analytic UV tail moment ``T`` of this integrator for one constraint.
+
+        .. math::
+            T_i[m] = \int_{w_{uv}}^{\infty} C_i(p_m, w) f_{uv}(w)\, dw
+
+        i.e. the constraint kernel weighted by the *bare* UV asymptotic shape
+        ``f_uv`` over the part of the ω axis that the quadrature grid does not
+        cover.  It is the only ingredient (besides the bulk-UV overlap ``A``,
+        see :meth:`uv_anchor`) of the general two-constraint tail correction
+
+        .. math::
+            \Sigma_{12} = BB + A_1 T_2^T + T_1 A_2^T + T_1 T_2^T   \qquad (**)
+
+        implemented in :meth:`GaussLegendre_1D_log._uv_tail_correction`.
+
+        ``T`` is per-constraint **and** per-row: two constraints whose kernels
+        have different UV falloffs have different tail moments, so a single
+        shared scalar is *not* valid for the cross block (see
+        ``docs/fredipy_uvtail_fix_plan.md`` in the reconstructions repo).
+
+        Returns
+        -------
+        2D array of shape ``(len(constraint.x), 1)``.  The default is all
+        zeros — integrators that carry no analytic tail, which lets
+        ``_uv_tail_correction`` short-circuit and stay bit-identical to the
+        uncorrected quadrature.
+        """
+        return np.zeros((constraint.x.shape[0], 1))
+
+    def uv_anchor(self) -> tuple | None:
+        r"""Anchor point used to evaluate the bulk-UV overlap ``A`` of ``(**)``.
+
+        .. math::
+            A_i[m] = \frac{1}{f_{uv}(w_{uv})}
+                     \sum_j W_j\, C_i(p_m, w_j)\, K(w_j, w_{uv})
+
+        which is *exact*, not approximate, whenever ``w_uv >> mu_uv``: the UV
+        branch of ``AsymptoticKernel`` factorises there as
+        ``K(w, w_uv) = θ_uv(w) f_uv(w) f_uv(w_uv)``, so dividing by the anchor
+        value ``f_uv(w_uv)`` recovers ``Σ_j W_j C_i(w_j) θ_uv(w_j) f_uv(w_j)``
+        to all digits.
+
+        Returns
+        -------
+        ``None`` for tail-free integrators (the default).  Tail-carrying
+        integrators return ``(w_uv, f_uv_anchor)`` with ``w_uv`` a ``(1, 1)``
+        column vector holding the UV split point and ``f_uv_anchor`` the scalar
+        ``f_uv(w_uv)``.
+        """
+        return None
+
 
 class Riemann(Integrator):
     """Implementation of the Riemann integration in arbitrary dimensions and kernels.
@@ -103,7 +172,8 @@ class Riemann(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
 
         p = constraint.x
@@ -161,15 +231,17 @@ class Riemann_1D(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
-        return self.doubleIntegration(constraint, kernel, constraint)
+        return self.doubleIntegration(constraint, kernel, constraint, derivative=derivative)
 
     def doubleIntegration(
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
         return self.dw**2 * (
             constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
@@ -215,15 +287,17 @@ class Riemann_1D_log(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
-        return self.doubleIntegration(constraint, kernel, constraint)
+        return self.doubleIntegration(constraint, kernel, constraint, derivative=derivative)
 
     def doubleIntegration(
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
         return self.dw**2 * (
             self.jac * constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
@@ -264,6 +338,12 @@ class GaussLegendre_1D_log(Integrator):
             int_n: int = 100
             ) -> None:
 
+        # Grid definition kept as attributes purely for diagnostics: the node-compatibility
+        # guard in _uv_tail_correction names these in its error message.
+        self.w_min = w_min      # lower end of the quadrature range in ω
+        self.w_max = w_max      # upper end of the quadrature range in ω
+        self.int_n = int_n      # number of Gauss-Legendre nodes
+
         # GL nodes (xi in [-1,1]) and weights
         xi, wi = np.polynomial.legendre.leggauss(int_n)
 
@@ -280,21 +360,29 @@ class GaussLegendre_1D_log(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False
             ) -> np.ndarray:
-        return self.doubleIntegration(constraint, kernel, constraint)
+        return self.doubleIntegration(constraint, kernel, constraint, derivative=derivative)
 
     def doubleIntegration(
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False
             ) -> np.ndarray:
-        return (
+        bulk = (
             self.weights * constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
             @ kernel(self.w, self.w)
             @ (self.weights * constraint2(make_row_vector(self.w), x=make_column_vector(constraint2.x))).T
         )
+        # The analytic UV tail lives here (not as an override on the UVtail subclass) so that
+        # both orderings of a constraint pair go through the same code and the assembled
+        # covariance matrix is symmetric *by construction* — np.linalg.cholesky reads only the
+        # lower triangle and would silently accept an asymmetric matrix otherwise.
+        return bulk + self._uv_tail_correction(
+            constraint1, kernel, constraint2, derivative=derivative)
 
     def singleIntegration(
             self,
@@ -307,42 +395,182 @@ class GaussLegendre_1D_log(Integrator):
             @ kernel(self.w, w_pred)
         )
 
+    @staticmethod
+    def _same_quadrature(
+            integrator1: Integrator,
+            integrator2: Integrator
+            ) -> bool:
+        """True if two integrators share (numerically) the same nodes and weights."""
+        w1, w2 = getattr(integrator1, 'w', None), getattr(integrator2, 'w', None)
+        v1, v2 = getattr(integrator1, 'weights', None), getattr(integrator2, 'weights', None)
+        if w1 is None or w2 is None or v1 is None or v2 is None:
+            return False
+        if w1.shape != w2.shape or v1.shape != v2.shape:
+            return False
+        return bool(np.allclose(w1, w2) and np.allclose(v1, v2))
+
+    @staticmethod
+    def _describe_grid(integrator: Integrator) -> str:
+        """Human-readable grid summary used in the node-mismatch error message."""
+        return (f"{type(integrator).__name__}(w_min={getattr(integrator, 'w_min', '?')}, "
+                f"w_max={getattr(integrator, 'w_max', '?')}, "
+                f"int_n={getattr(integrator, 'int_n', '?')})")
+
+    def _uv_tail_correction(
+            self,
+            constraint1: LinearEquality,
+            kernel: Callable,
+            constraint2: LinearEquality,
+            derivative: bool = False
+            ) -> np.ndarray | float:
+        r"""Analytic UV tail correction to the (constraint1, constraint2) covariance block.
+
+        Splitting *each* of the two integrals at the UV point ``w_uv`` into a bulk part
+        ``(w_min, w_uv)`` — which the quadrature grid covers — and a tail part
+        ``(w_uv, ∞)`` — which it does not — and using that ``AsymptoticKernel``
+        factorises as ``K(w, w') = [θ_uv(w) f_uv(w)] f_uv(w')`` whenever ``w' > w_uv``
+        with ``w_uv >> mu_uv`` (rank-1 in the tail, exact up to
+        ``O(exp(-(w_uv - mu_uv)/l_uv))``), the four pieces give
+
+        .. math::
+            \Sigma_{12} = BB + A_1 T_2^T + T_1 A_2^T + T_1 T_2^T   \qquad (**)
+
+        with ``BB`` the plain double quadrature computed by
+        :meth:`doubleIntegration`, ``A_i`` the bulk-UV overlap (see
+        :meth:`Integrator.uv_anchor`) and ``T_i`` the per-constraint, per-row tail
+        moment (see :meth:`Integrator.uv_tail_moment`).
+
+        Setting ``C_1 = C_2`` and ``T`` row-independent collapses ``(**)`` to the
+        legacy symmetric closed form ``bulk + 2 A T + T²``, so the symmetric case is
+        a special case of this method and needs no separate override.
+
+        Gradient mode (``derivative=True``)
+        -----------------------------------
+        ``GaussianProcess.log_likelihood_grad`` reassembles the same block with
+        ``dK/dtheta`` substituted for ``K``.  Under that substitution the two ``A``
+        terms differentiate themselves correctly — ``A_i`` is linear in the kernel
+        (``A_i = W C_i K(ω, w_uv) / f_uv(w_uv)`` with a hyperparameter-independent
+        anchor value), so ``A_i[dK/dtheta] = dA_i/dtheta`` exactly.  The term
+        ``T_1 T_2^T`` however contains no kernel at all: ``T`` is the *analytic*
+        tail moment, a function of ``w_uv`` and the anomalous dimension only, so
+        ``d(T_1 T_2^T)/dtheta = 0``.  Adding it unchanged in gradient mode would
+        treat the derivative of a constant as the constant itself, which is why it
+        is dropped here.  The likelihood *value* is unaffected either way; only the
+        gradient is.
+        """
+        integrator1 = constraint1.op.integrator
+        integrator2 = constraint2.op.integrator
+        tail1 = integrator1.uv_tail_moment(constraint1)
+        tail2 = integrator2.uv_tail_moment(constraint2)
+
+        # Fast path: no constraint carries an analytic tail, so (**) reduces to BB.
+        # This short circuit is load-bearing — it keeps every plain-quadrature model
+        # (three-gluon-vert, ghost-gluon-vert, fgvert-sd, all pre-existing fredipy
+        # tests) bit-identical to the uncorrected result. Do not drop it.
+        if not np.any(tail1) and not np.any(tail2):
+            return 0.0
+
+        # (**) mixes the two constraints on a *shared* set of quadrature nodes; it is
+        # not well defined if the two integrators discretise ω differently.
+        if integrator1 is not integrator2 and not self._same_quadrature(integrator1, integrator2):
+            raise NotImplementedError(
+                "UV tail correction requires both integral constraints to share the same "
+                "quadrature nodes and weights, but got "
+                f"{self._describe_grid(integrator1)} and {self._describe_grid(integrator2)}."
+            )
+
+        anchors = [a for a in (integrator1.uv_anchor(), integrator2.uv_anchor()) if a is not None]
+        if not anchors:
+            raise NotImplementedError(
+                "A non-zero UV tail moment was reported but no integrator supplied a UV "
+                f"anchor via uv_anchor(): {self._describe_grid(integrator1)} and "
+                f"{self._describe_grid(integrator2)}."
+            )
+        w_uv, f_uv_anchor = anchors[0]
+        for other_w_uv, other_f_uv in anchors[1:]:
+            assert np.allclose(w_uv, other_w_uv) and np.isclose(f_uv_anchor, other_f_uv), \
+                "Integral constraints report incompatible UV anchors."
+
+        # A_i = (W C_i) @ K(ω, w_uv) / f_uv(w_uv), both evaluated on *this* integrator's
+        # nodes (guaranteed above to coincide with the other integrator's).
+        c1_row = constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
+        c2_row = constraint2(make_row_vector(self.w), x=make_column_vector(constraint2.x))
+        K_col = kernel(self.w, w_uv)                                   # (N, 1)
+        A1 = (self.weights * c1_row @ K_col) / f_uv_anchor             # (M1, 1)
+        A2 = (self.weights * c2_row @ K_col) / f_uv_anchor             # (M2, 1)
+
+        correction = A1 @ tail2.T + tail1 @ A2.T
+        if derivative:
+            # d(T_1 T_2^T)/dtheta = 0: T carries no hyperparameter dependence. See the
+            # "Gradient mode" section of the docstring.
+            return correction
+        return correction + tail1 @ tail2.T
+
 
 class GaussLegendre_1D_log_UVtail(GaussLegendre_1D_log):
-    """GL log-space quadrature on (w_min, w_uv) with an analytic UV tail.
+    """GL log-space quadrature on (w_min, w_uv) plus an analytic UV tail.
 
-    For ω > w_uv the AsymptoticKernel factorises as
-        K(ω, ω') ≈ f_uv(ω) f_uv(ω'),
-    so the analytic tail T = ∫_{log w_uv}^∞ (2t)^{-35/22} dt can be
-    folded in exactly via corrections to the integration methods.
+    **Rank-1 tail assumption.**  For ω' > w_uv with w_uv >> mu_uv the soft
+    thetas of ``AsymptoticKernel`` saturate (θ_uv(ω') = 1 to machine
+    precision), so the kernel becomes rank-1 in the tail:
 
-    The substitution u = (2 log ω)^{-13/22} maps the UV integrand to a
-    constant, giving the closed form
+        K(ω, ω') = [θ_uv(ω) f_uv(ω)] · f_uv(ω')            (*)
 
-        T = (2 log w_uv)^{-13/22} / (2 × 13/22).
+    This is the *only* assumption made here; it holds up to
+    ``O(exp(-(w_uv - mu_uv)/l_uv))``.
+
+    **General two-constraint correction.**  Splitting each of the two integrals
+    of a covariance block at w_uv into bulk (w_min, w_uv) and tail (w_uv, ∞) and
+    applying (*) to whichever argument lies in the tail gives
+
+        A_i[m] = ∫_bulk       C_i(p_m, ω) θ_uv(ω) f_uv(ω) dω
+        T_i[m] = ∫_{w_uv}^∞   C_i(p_m, ω) f_uv(ω) dω
+
+        Σ_12 = BB + A_1 T_2^T + T_1 A_2^T + T_1 T_2^T      (**)
+
+    where ``BB`` is the plain double quadrature of the parent class.  Two points
+    that are easy to get wrong:
+
+    * ``T`` is **per constraint and per row**, not a single shared scalar: two
+      constraints whose kernels have different UV falloffs (e.g. a sum-rule
+      kernel ``C(p, ω) = ω`` versus a Källén-Lehmann data kernel) have entirely
+      different tail moments.  This is why ``tail_moment`` is a required
+      constructor argument rather than a hardcoded closed form.
+    * ``A`` obtained via the anchor, ``A = (W C @ K(ω, w_uv)) / f_uv(w_uv)``, is
+      **exact**, not approximate: by (*) the anchor column is
+      ``K(ω_i, w_uv) = θ_uv(ω_i) f_uv(ω_i) f_uv(w_uv)``, so the division
+      recovers the bulk-UV overlap to all digits.
+
+    The symmetric case ``C_1 = C_2`` with row-independent ``T`` collapses (**)
+    to the legacy closed form ``bulk + 2 A T + T²``, so this class deliberately
+    does **not** override ``doubleIntegration``/``doubleIntegrationSymmetric``:
+    the correction is applied by the parent class for *both* orderings of a
+    constraint pair, which is what keeps the assembled covariance matrix
+    symmetric by construction (``np.linalg.cholesky`` reads only the lower
+    triangle and would silently accept an asymmetric matrix).
 
     As with the parent class, plain kernels ``K(p, ω)`` are passed directly;
     the log-space Jacobian ω is absorbed into the quadrature weights.
 
-    **Correction formulas** (A_θ = UV-component of the bulk integral):
-
-    * ``doubleIntegrationSymmetric``:
-        full = bulk + 2 A_θ T + T²
-        where A_θ[m] ≈ (1/f_uv(w_uv)) × Σ_i W_i C_m(ω_i) K(ω_i, w_uv)
-
-    * ``singleIntegration``:
-        full = numerical + T × K(w_uv, ω_pred) / f_uv(w_uv)
-        (K(w_uv, ω_pred)/f_uv(w_uv) ≈ θ_uv(ω_pred) f_uv(ω_pred) for
-        prediction points far from w_uv, where the RBF part of K vanishes)
-
     Parameters
     ----------
     w_min   : float
+        Lower end of the quadrature range in ω.
     w_uv    : float
-        UV split where UV asymptotics fully apply.  Recommended: ≥ 1000.
+        UV split where the UV asymptotics fully apply, i.e. the upper end of the
+        quadrature range; everything above it is covered by ``tail_moment``.
+        Recommended: ≥ 1000, and in any case >> mu_uv of the kernel.
     int_n   : int
+        Number of Gauss-Legendre nodes on (w_min, w_uv).
     uv_func : callable
-        The UV asymptotic function f_uv(ω), e.g. ``uv_asymptotics``.
+        The UV asymptotic function f_uv(ω), e.g. ``uv_asymptotics``.  Used only
+        to evaluate the anchor value f_uv(w_uv).
+    tail_moment : callable
+        Maps ``constraint.x`` of shape (M, d) to the tail moments T of shape
+        (M, 1), i.e. ``T[m] = ∫_{w_uv}^∞ C(p_m, ω) f_uv(ω) dω`` for the
+        constraint this integrator is attached to.  Required (no default): a
+        silent default is exactly what let a gluon-specific closed form be
+        applied to the ghost sum rule, off by a factor 10.4.
     """
 
     def __init__(
@@ -350,33 +578,33 @@ class GaussLegendre_1D_log_UVtail(GaussLegendre_1D_log):
             w_min: float,
             w_uv: float,
             int_n: int,
-            uv_func: Callable
+            uv_func: Callable,
+            tail_moment: Callable[[np.ndarray], np.ndarray]
             ) -> None:
         super().__init__(w_min, w_uv, int_n)
-        self.uv_func = uv_func
+        self.uv_func = uv_func          # UV asymptotic shape f_uv(ω), used for the anchor value
+        self.tail_moment = tail_moment  # constraint.x -> (M, 1) analytic tail moments T
         # Anchor point at the UV split boundary
         self.w_uv = make_column_vector(np.array([w_uv]))      # (1, 1)
         self.f_uv_anchor = float(uv_func(self.w_uv).flat[0])   # scalar: f_uv(w_uv)
-        # Analytic tail: ∫_{log w_uv}^∞ (2t)^{-35/22} dt
-        self.T_uv = (2.0 * np.log(w_uv)) ** (-13.0 / 22.0) / (2.0 * 13.0 / 22.0)
 
-    def doubleIntegrationSymmetric(
+    def uv_tail_moment(
             self,
-            constraint: LinearEquality,
-            kernel: Callable
+            constraint: LinearEquality
             ) -> np.ndarray:
-        bulk = super().doubleIntegrationSymmetric(constraint, kernel)  # (M, M)
+        tail = np.asarray(self.tail_moment(constraint.x), dtype=float)
+        if tail.ndim == 1:
+            tail = tail.reshape(-1, 1)
+        expected = (constraint.x.shape[0], 1)
+        if tail.shape != expected:
+            raise ValueError(
+                f"tail_moment must return an array of shape {expected} for this constraint, "
+                f"got {tail.shape}."
+            )
+        return tail
 
-        # A_θ ≈ (W C @ K_col) / f_uv(w_uv),  shape (M, 1)
-        # K_col[i] = K(ω_i, w_uv) ≈ θ_uv(ω_i) f_uv(ω_i) f_uv(w_uv)  (for large w_uv)
-        K_col = kernel(self.w, self.w_uv)                              # (N, 1)
-        c_row = constraint(make_row_vector(self.w), x=make_column_vector(constraint.x))
-        A = (self.weights * c_row @ K_col) / self.f_uv_anchor         # (M, 1)
-
-        # correction_{mn} = T (A_m + A_n) + T²
-        ones_col = np.ones((A.shape[0], 1))
-        correction = self.T_uv * (A @ ones_col.T + ones_col @ A.T) + self.T_uv ** 2
-        return bulk + correction
+    def uv_anchor(self) -> tuple:
+        return (self.w_uv, self.f_uv_anchor)
 
     def singleIntegration(
             self,
@@ -385,9 +613,10 @@ class GaussLegendre_1D_log_UVtail(GaussLegendre_1D_log):
             w_pred: np.ndarray
             ) -> np.ndarray:
         numerical = super().singleIntegration(constraint, kernel, w_pred)
-        # tail = T × K(w_uv, ω_pred) / f_uv(w_uv),  shape (1, N_pred)
-        # K(w_uv, ω_pred) / f_uv(w_uv) ≈ θ_uv(ω_pred) f_uv(ω_pred) for w_uv >> ω_pred
-        tail = (self.T_uv / self.f_uv_anchor) * kernel(self.w_uv, w_pred)  # (1, N_pred)
+        # tail[m, n] = T[m] × K(w_uv, ω_pred[n]) / f_uv(w_uv) — an outer product, since T is
+        # per-row: broadcasting a single scalar T is only correct for a one-row constraint.
+        # K(w_uv, ω_pred) / f_uv(w_uv) ≈ θ_uv(ω_pred) f_uv(ω_pred) for w_uv >> ω_pred.
+        tail = self.uv_tail_moment(constraint) @ (kernel(self.w_uv, w_pred) / self.f_uv_anchor)
         return numerical + tail
 
 
@@ -436,15 +665,17 @@ class GaussLegendre_1D_semiinf(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
-        return self.doubleIntegration(constraint, kernel, constraint)
+        return self.doubleIntegration(constraint, kernel, constraint, derivative=derivative)
 
     def doubleIntegration(
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
         return (
             self.weights * constraint1(make_row_vector(self.w), x=make_column_vector(constraint1.x))
@@ -489,15 +720,17 @@ class Simpson_1D(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
-        return self.doubleIntegration(constraint, kernel, constraint)
+        return self.doubleIntegration(constraint, kernel, constraint, derivative=derivative)
 
     def doubleIntegration(
             self,
             constraint1: LinearEquality,
             kernel: Callable,
-            constraint2: LinearEquality
+            constraint2: LinearEquality,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
 
         return self.dw**2 / 9 * (
@@ -544,7 +777,8 @@ class Simpson(Integrator):
     def doubleIntegrationSymmetric(
             self,
             constraint: LinearEquality,
-            kernel: Callable
+            kernel: Callable,
+            derivative: bool = False      # unused: this rule is linear in `kernel`
             ) -> np.ndarray:
 
         p = constraint.x
